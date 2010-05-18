@@ -1,0 +1,27 @@
+(:
+ : Copyright 2010 Mark Logic Corporation.  All Rights Reserved.
+ :)
+
+xquery version "1.0-ml";
+declare namespace ai="api-install";
+
+try {
+let $app         := xdmp:get-request-field("app")
+let $name        := fn:substring-before($app, ":")
+let $port        := fn:substring-after($app, ":")
+let $noappserver := xdmp:get-request-field("noappserver")
+return ( 
+    xdmp:invoke("hooks/install/precommit.xqy", (xs:QName("ai:name"), $name, xs:QName("ai:port"), $port)),
+    xdmp:invoke("create-forest.xqy", (xs:QName("ai:name"), $name)),
+    xdmp:invoke("create-database.xqy", (xs:QName("ai:name"), $name)),
+    xdmp:invoke("attach-forest.xqy", (xs:QName("ai:name"), $name)),
+    if ($noappserver) then () else xdmp:invoke("create-http-server.xqy", (xs:QName("ai:name"), $name, xs:QName("ai:port"), $port)),
+    xdmp:invoke("hooks/install/incommit.xqy", (xs:QName("ai:name"), $name, xs:QName("ai:port"), $port)),
+    <div> Click 
+      <a href="{fn:concat('http://localhost:', $port)}">here</a> to continue...
+    </div> )
+ } catch ($e) {
+   <div> <h3>Error</h3>
+     <div class="error-stack-trace"> { $e } </div>
+   </div>
+ }

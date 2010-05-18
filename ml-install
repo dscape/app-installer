@@ -1,0 +1,206 @@
+#!/bin/bash
+#
+# Copyright 2010 Mark Logic Corporation.  All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The use of the Apache License does not indicate that this project is
+# affiliated with the Apache Software Foundation.
+. /lib/lsb/init-functions
+. /etc/sysconfig/MarkLogic
+usage="Usage: $0 [OPTION]...
+This script can be used to easen regular deployment tasks in Mark Logic Server.
+Includes hooks that you can use to extend the normal install
+
+Options:
+  -u Set the user
+  -p Set the password
+  -N Set the application name
+  -P Set the application port
+
+  -d The directory where the app to be installed currently resides
+     Will be ignored if you supply -i
+
+  -b Script (.xqy) to be run before the installer is invoked
+  -m Script (.xqy) to be run after database artifacts are created, but before
+     deployment of the appserver.
+  -a Script (.xqy) to be run after the installer is invoked.
+     Note: Only this script is actually deployed with the app, 
+           so to do things like loading content you have to use this
+           trigger. Will be ignored if you supply -i, as that means no app
+           was deployed (you simply installed a database)
+
+  -i Create database artifacts, but NO Application Server.
+  -j Create an Application Server, but NO database artifacts
+
+  -D Turns debug on
+  -l Base path for the installer libraries, case they aren't in ./lib-installer"
+
+function debug_echo () {
+  if [ ! -z "$debug" ]; then
+    for line in "$@"
+      do
+	      echo "$(date) - [MarkLogic] $line"
+      done
+  fi }
+
+function debug_exec () {
+  if [ ! -z "$debug" ]; then
+    debug_echo "$1"
+    inst=&$1
+  else
+    inst=&$1 > /dev/null 2>&1
+  fi }
+
+user=""
+pass=""
+appname=""
+appport=""
+appdir=""
+bxqy=""
+mxqy=""
+axqy=""
+debug=""
+appserver="1"
+db="1"
+
+scriptpath=`cd $(dirname $0);pwd`
+libname="lib-installer"
+libfolder="$scriptpath/$libname"
+
+while getopts "hu:p:N:P:b:m:a:d:l:Dij" opts
+do case "$opts" in
+  l) libfolder="$OPTARG";;
+  u) user="$OPTARG";;
+  p) pass="$OPTARG";;
+  P) appport="$OPTARG";;
+  N) appname="$OPTARG";;
+  b) bxqy="$OPTARG";;
+  m) mxqy="$OPTARG";;
+  a) axqy="$OPTARG";;
+  d) appdir="$OPTARG";;
+  D) debug="1";;
+  i) appserver="";;
+  j) db="";;
+  h) echo >&2 "$usage"
+     exit 1;;
+  ?) echo >&2 "$usage"
+     exit 1;;
+   esac
+done
+
+shift $(($OPTIND - 1))
+
+debug_echo "From opts:" \
+"  Lib Folder: $libfolder" \
+"  Lib Name: $libname" \
+"  Where is: $scriptpath" \
+"  User: $user" \
+"  Application Name: $appname" \
+"  Application Port: $appport" \
+"  Application Dir: $appdir" \
+"  Before Commit: $bxqy" \
+"  In Commit: $mxqy" \
+"  After Commit: $axqy" 
+
+if [ "$#" -ne 0 ]; then
+ echo "Wrong number of arguments"
+ echo $usage
+ exit 1
+fi
+
+if [ -z "$appname" ]; then
+  echo -n "[MarkLogic] Application Name: "
+  read appname > /dev/null 2>&1
+fi
+if [ -z "$appport" ]; then
+  echo -n "[MarkLogic] Application Port: "
+  read appport > /dev/null 2>&1
+fi
+
+params="app=$appname:$appport"
+if [ ! -z "$appserver" ]; then
+  if [ -z "$appdir" ]; then
+    echo -n "[MarkLogic] Directory to install: "
+    read appdir > /dev/null 2>&1
+  fi
+else
+  params=$params"&noappserver=yes"
+fi
+if [ -z "$db" ]; then
+  params=$params"&nodb=yes"
+fi
+
+debug_echo "Params => $params"
+
+if [ -z "$user" ]; then
+  echo -n "[MarkLogic] Username: "
+  read user > /dev/null 2>&1
+fi
+if [ -z "$pass" ]; then
+  echo -n "[MarkLogic] Password for $user: "
+  read -s pass > /dev/null 2>&1
+  echo
+fi
+
+instsysdir="$MARKLOGIC_INSTALL_DIR/Docs/$libname"
+instappdir="$MARKLOGIC_INSTALL_DIR/Apps/usr"
+
+debug_echo "Lib Folder: $libfolder" \
+"Lib Name: $libname" \
+"Where is: $scriptpath" \
+"User: $user" \
+"Application Name: $appname" \
+"Application Port: $appport" \
+"Application Dir: $appdir" \
+"Before Commit: $bxqy" \
+"In Commit: $mxqy" \
+"After Commit: $axqy" 
+
+#sudo just to avoid sudo box appearing in the middle on flow
+sudo echo "Lazy Panda is now installing app $appname:$appport from '$appdir'"
+echo "  . Registering the Installer with MarkLogic Server"
+debug_exec "sudo rm -rf $instsysdir"
+debug_exec "sudo cp -r $libfolder/ $instsysdir"
+if [ ! -z "$bxqy" ]; then
+  echo "    . Installing Pre-commit triggers ($bxqy)"
+  debug_exec "sudo cp $bxqy $instsysdir/hooks/install/precommit.xqy"
+fi
+if [ ! -z "$mxqy" ]; then
+  echo "    . Installing In-commit triggers ($mxqy)"
+  debug_exec "sudo cp $mxqy $instsysdir/hooks/install/incommit.xqy"
+fi
+echo "  . Registering the application with MarkLogic Server"
+
+debug_exec "curl --anyauth http://$user:$pass@localhost:8000/$libname/install.xqy?$params"
+echo "  . Taking a nap"
+sleep 5
+if [ ! -z "$appserver" ]; then
+  echo "  . Deploying the application to '$instappdir/$appname'"
+  debug_exec "sudo rm -r $instappdir/$appname"
+  debug_exec "sudo mkdir $instappdir"
+  debug_exec "sudo cp -r $appdir/ $instappdir/$appname"
+  if [ ! -z "$axqy" ]; then
+    echo "    . Installing Pos-commit triggers ($axqy)"
+    debug_exec "sudo cp $axqy $instappdir/$appname/_poscommit.xqy"
+    debug_exec "curl --anyauth http://$user:$pass@localhost:$appport/_poscommit.xqy?app=$appname"
+    sleep 5
+    echo "      . Give me a break, sleeping"
+    debug_exec "sudo rm $instappdir/$appname/_poscommit.xqy"
+  fi
+fi
+echo "  . Removing the installer from disk"
+debug_exec "sudo rm -rf $instsysdir"
+echo "  . Installation Complete @ http://localhost:$appport"
+debug_exec "firefox http://localhost:$appport"
+echo "The End! Happy Panda!"

@@ -1,0 +1,136 @@
+#!/bin/bash
+#
+# Copyright 2010 Mark Logic Corporation.  All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The use of the Apache License does not indicate that this project is
+# affiliated with the Apache Software Foundation.
+. /lib/lsb/init-functions
+. /etc/sysconfig/MarkLogic
+usage="Usage: $0 [OPTION]...
+This script is to be used to uninstall apps that were installed using
+ml-install
+
+Options:
+  -D Turns debug on
+  -u Set the user
+  -p Set the password
+  -N Set the application name
+  -b Script (.xqy) to be run before the uninstaller is invoked
+  -a Script (.xqy) to be run after the uninstaller is invoked."
+
+function debug_echo () {
+  if [ ! -z "$debug" ]; then
+    for line in "$@"
+      do
+	      echo "$(date) - [MarkLogic] $line"
+      done
+  fi }
+
+function debug_exec () {
+  if [ ! -z "$debug" ]; then
+    debug_echo "$1"
+    inst=&$1
+  else
+    inst=&$1 > /dev/null 2>&1
+  fi }
+
+user=""
+pass=""
+appname=""
+bxqy=""
+axqy=""
+debug=""
+
+scriptpath=`cd $(dirname $0);pwd`
+libname="lib-installer"
+libfolder="$scriptpath/$libname"
+
+while getopts "hu:p:N:b:a:l:D" opts
+do case "$opts" in
+  l) libfolder="$OPTARG";;
+  u) user="$OPTARG";;
+  p) pass="$OPTARG";;
+  N) appname="$OPTARG";;
+  b) bxqy="$OPTARG";;
+  a) axqy="$OPTARG";;
+  D) debug="1";;
+  h) echo >&2 "$usage"
+     exit 1;;
+  ?) echo >&2 "$usage"
+     exit 1;;
+   esac
+done
+
+shift $(($OPTIND - 1))
+
+if [ "$#" -ne 0 ]; then
+ echo "Wrong number of arguments"
+ echo $usage
+ exit 1
+fi
+
+if [ -z "$user" ]; then
+  echo -n "[MarkLogic] Username: "
+  read user > /dev/null 2>&1
+fi
+if [ -z "$pass" ]; then
+  echo -n "[MarkLogic] Password for $user: "
+  read -s pass > /dev/null 2>&1
+  echo
+fi
+if [ -z "$appname" ]; then
+  echo -n "[MarkLogic] Application Name: "
+  read appname > /dev/null 2>&1
+fi
+
+debug_echo "Lib Folder: $libfolder" \
+"Lib Name: $libname" \
+"Where is: $scriptpath" \
+"User: $user" \
+"Application Name: $appname" \
+"Before Commit: $bxqy" \
+"After Commit: $axqy" 
+
+instsysdir="$MARKLOGIC_INSTALL_DIR/Docs/$libname"
+instappdir="$MARKLOGIC_INSTALL_DIR/Apps/usr"
+
+echo "Lazy Panda is now un-installing app $appname"
+echo "                              ( that makes him a sad panda )"
+echo "  . Registering the Installer with MarkLogic Server"
+debug_exec "sudo rm -rf $instsysdir"
+debug_exec "sudo cp -r $libfolder/ $instsysdir"
+if [ ! -z "$bxqy" ]; then
+  echo "    . Installing Pre-commit triggers ($bxqy)"
+  debug_exec "sudo cp $bxqy $instsysdir/hooks/uninstall/precommit.xqy"
+fi
+if [ ! -z "$axqy" ]; then
+  echo "    . Installing Pos-commit triggers ($axqy)"
+  debug_exec "sudo cp $axqy $instsysdir/hooks/uninstall/poscommit.xqy"
+fi
+echo "  . Un-registering the application with MarkLogic Server"
+debug_exec "curl --anyauth http://$user:$pass@localhost:8000/$libname/uninstall.xqy?app=$appname"
+# lazy way to avoi curl: (52) Empty reply from server
+# this is a known bug.. needs investigation
+# probably because server restarts after removing an appserver
+sleep 10
+debug_exec "curl --anyauth http://$user:$pass@localhost:8000/$libname/uninstall.xqy?app=$appname"
+echo "  . Taking a nap"
+sleep 5
+echo "  . Removing the app from disk"
+debug_exec "sudo rm -rf $instappdir/$appname"
+echo "  . Removing the installer from disk"
+debug_exec "sudo rm -rf $instsysdir"
+echo "  . Installation Complete"
+echo "The End!    (panda says bye)"
